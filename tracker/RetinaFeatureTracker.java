@@ -9,6 +9,7 @@ import java.awt.Polygon;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
+import java.awt.image.WritableRaster;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -27,6 +28,9 @@ import java.util.stream.*;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.math.plot.utils.Array;
+
+
+
 
 import boofcv.alg.filter.binary.BinaryImageOps;
 import boofcv.alg.filter.binary.Contour;
@@ -57,6 +61,13 @@ import georegression.struct.point.Point2D_F64;
 import georegression.struct.point.Point2D_I32;
 import georegression.struct.shapes.EllipseRotated_F64;
 import georegression.struct.shapes.Rectangle2D_I32;
+import ij.ImageStack;
+import ij.process.*;
+
+import inra.ijpb.morphology.*;
+import inra.ijpb.morphology.strel.CubeStrel;
+import inra.ijpb.morphology.strel.SquareStrel;
+
 import java.awt.Shape;
 
 @SuppressWarnings("rawtypes")
@@ -1616,49 +1627,345 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 	
 	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
 	public String makeMagno(String stemLoc, String vidLoc) {
-
+		//TIMER STUFF
+		long startTime;
+		long endTime;
+		double totalMagnoTime =0;
+		
+		startTime = System.nanoTime();
 
 		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
-		sequence.OpenFile();
-		
+		sequence.OpenFile(); 
 		int height = sequence.getFrameHeight();
 		int width = sequence.getFrameWidth(); 
+		
 
-		VideoFrameWriter mask = new VideoFrameWriter(new File(stemLoc), width, height, 30); 
+		
+		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
 		VariableRetina retina = new VariableRetina(width, height, true); //create retina
-
-		mask.OpenFile(); //open videowriter
 		
-		
-		//This part shows the video on screen
-		//gui.setPreferredSize(new Dimension(width, height));
-		//ShowImages.showWindow(gui,CatGetter.extract(vidLoc), true);
-		
-		
-		BufferedImage newFrame = sequence.NextFrame();
+		BufferedImage inFrame = sequence.NextFrame();
 		int frameNum=2;
-		while((newFrame = sequence.NextFrame())!=null) { //until we run out of frames
+		while((inFrame = sequence.NextFrame())!=null) { //Fill up 'frames' with magnos
 		
-			retina.ProcessFrame(RGBModel.maxContrast(newFrame));
-			BufferedImage currFrame = retina.getMagno(); //currFrame = parvo version
+			
+			
+			
+			retina.ProcessFrame(RGBModel.maxContrast(inFrame));
+			BufferedImage magFrame = retina.getMagno(); //currFrame = magno version
+			
+			
+			frames.add(magFrame);
+			//
+			
+			//SHOWS FRAME NUMBER
+			//g2.setColor(Color.white);
+			//g2.drawString(Integer.toString(frameNum), 20, 20);
+			//g2.setStroke(new BasicStroke(3));
+			
+		}
+		
+		sequence.Close();
+		
+		
+		VideoFrameWriter mask = new VideoFrameWriter(new File(stemLoc), width, height, 30); 
+		mask.OpenFile(); //open videowriter
+
+		for(BufferedImage currFrame: frames){
+			
+			
+			
+			mask.ProcessFrame(currFrame);
 			Graphics2D g2 = currFrame.createGraphics();
 			
+			//SHOWS FRAME NUMBER
 			g2.setColor(Color.white);
 			g2.drawString(Integer.toString(frameNum), 20, 20);
 			g2.setStroke(new BasicStroke(3));
-			
-
-			mask.ProcessFrame(currFrame);
-			//gui.setBufferedImage(currFrame);
-			//gui.repaint();
 			frameNum++;
 		}
+			
 		mask.Close();
-		sequence.Close();
+		endTime = System.nanoTime();
+		totalMagnoTime += endTime - startTime;
+		System.out.println("Time in seconds: " +  Integer.toString((int) Math.round(totalMagnoTime/1e9)));
+		
 		return stemLoc;
 		
 
 	}
+	
+	
+	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
+	public String makeFakeMagno(String stemLoc, String vidLoc) {
+		//TIMER STUFF
+		long startTime;
+		long endTime;
+		double totalMagnoTime =0;
+
+		startTime = System.nanoTime();
+
+		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
+		sequence.OpenFile(); 
+		int height = sequence.getFrameHeight();
+		int width = sequence.getFrameWidth(); 
+		
+	
+		
+		ArrayList<int[][]> grayFrames = new ArrayList<int[][]>();
+		ImageStack diffstack = new ImageStack(width,height);
+		ImageStack dilatedstack= new ImageStack(width,height);
+		ImageStack finalstack = new ImageStack(width,height);
+		
+		//VariableRetina retina = new VariableRetina(width, height, true); //create retina
+		
+		BufferedImage inFrame = sequence.NextFrame();
+		int frameNum=2;
+		while((inFrame = sequence.NextFrame())!=null) { //Fill up 'frames' with grayscales
+		
+			
+			
+			
+			byte[][] gray = ImageUtils.BufferedImage2Grayscale(inFrame);
+			int[][] G= Mat.Unsigned2Int(gray);
+			grayFrames.add(G);
+			
+
+			
+			
+			
+		
+			
+			//SHOWS FRAME NUMBER
+			//g2.setColor(Color.white);
+			//g2.drawString(Integer.toString(frameNum), 20, 20);
+			//g2.setStroke(new BasicStroke(3));
+			
+		}
+		
+		for (int[][] gf : grayFrames){
+			startTime = System.nanoTime();
+			ByteProcessor B;
+			int[][] diff = new int[width][height];
+			if (grayFrames.indexOf(gf)==0){
+				BufferedImage b = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+				//b = ImageUtils.Grayscale2SingleChannelBufferedImage(gf);
+				B = new ByteProcessor(b);
+			}
+			else{
+				int[][] old = grayFrames.get(grayFrames.indexOf(gf) -1);
+				for(int i = 0; i < width  ; i++){
+					for(int j = 0; j < height ; j++){
+						int num = gf[i][j] - old[i][j];
+						if(num <=10) diff[i][j] = 0;
+						else diff[i][j] = 255;
+					}
+				}
+				BufferedImage b = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+				//WritableRaster raster = (WritableRaster) b.getData();
+				//raster.setPixels(0,0,width,height,diff);
+				b = ImageUtils.Grayscale2BufferedImage(diff, 255);
+				B = new ByteProcessor(b);
+			}
+			
+			//System.out.println(B.isBinary());
+			diffstack.addSlice(B);
+			endTime = System.nanoTime();
+			totalMagnoTime += endTime - startTime;
+			
+		}
+		
+		sequence.Close();
+		
+		startTime = System.nanoTime();
+		
+		Strel se = SquareStrel.fromDiameter(7);
+		
+		for(int i = 0; i < diffstack.size(); i++){
+			ImageProcessor slice = diffstack.getProcessor(i+1);
+			ImageProcessor dilated = Morphology.dilation(slice, se);
+			dilatedstack.addSlice(dilated);
+		} 
+		
+		Strel3D se3 = CubeStrel.fromDiameter(5);
+		dilatedstack = Morphology.erosion(dilatedstack, se3);  //3DErode stack
+		
+		for(int i = 0; i < dilatedstack.size(); i++){
+			ImageProcessor slice =  dilatedstack.getProcessor(i+1);
+			ImageProcessor dilated = Morphology.dilation(slice, se);
+			finalstack.addSlice(dilated);
+		}
+		
+		endTime = System.nanoTime();
+		totalMagnoTime += endTime - startTime;
+		
+		VideoFrameWriter mask = new VideoFrameWriter(new File(stemLoc), width, height, 30); 
+		mask.OpenFile(); //open videowriter
+
+		frameNum=2;
+		for(int i = 0; i < finalstack.size() -1; i++){
+			
+			BufferedImage frameToShow = finalstack.getProcessor(i+1).getBufferedImage();
+			Graphics2D g2 = frameToShow.createGraphics();
+			
+			//SHOWS FRAME NUMBER
+			g2.setColor(Color.white);
+			g2.drawString(Integer.toString(frameNum), 20, 20);
+			g2.setStroke(new BasicStroke(3));
+			frameNum++;
+			
+			mask.ProcessFrame(frameToShow);
+			
+		}
+		
+	/*	for(FloatProcessor currFrame: diffstack){
+			
+			
+			
+			mask.ProcessFrame(currFrame);
+			Graphics2D g2 = currFrame.createGraphics();
+			
+			//SHOWS FRAME NUMBER
+			g2.setColor(Color.white);
+			g2.drawString(Integer.toString(frameNum), 20, 20);
+			g2.setStroke(new BasicStroke(3));
+			frameNum++;
+		}
+		*/
+			
+		mask.Close();
+		endTime = System.nanoTime();
+		totalMagnoTime += endTime - startTime;
+		System.out.println("Time in seconds: " +  Integer.toString((int) Math.round(totalMagnoTime/1e9)));
+		
+		return stemLoc;
+		
+
+	}
+	
+	
+	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
+	public String makeThreshMagno(String stemLoc, String vidLoc) {
+		//TIMER STUFF
+		long startTime;
+		long endTime;
+
+		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
+		sequence.OpenFile(); 
+		int height = sequence.getFrameHeight();
+		int width = sequence.getFrameWidth(); 
+
+		
+		
+		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
+		VariableRetina retina = new VariableRetina(width, height, true); //create retina
+		
+		/*
+		BufferedImage currFrame = retina.getMagno(); //currFrame = magno version
+		
+		byte grayscale[][] = ImageUtils.BufferedImage2Grayscale(currFrame);
+		int gray[][] = Mat.Unsigned2Int(grayscale); //The frame is now an 2D int matrix
+		
+		int unthresholded[][] = gray;
+		
+		
+		//The following loop thresholds our 2D matrix of ints (<100 -> 0) (>100 -> 255) 
+		for(int i = 0; i < gray.length; i++) {
+			for(int j = 0; j < gray[i].length; j++) {
+
+				if(gray[i][j] < 100) gray[i][j] = 0;
+				else gray[i][j] = 255;
+
+			}
+		}
+		
+		
+		grayscale = Mat.Int2Unsigned(gray); //grayscale is the unsigned version of gray 
+		
+		BufferedImage redoneFrame = ImageUtils.Grayscale2BufferedImage(grayscale, 255);
+		GrayF32 input = ConvertBufferedImage.convertFromSingle(redoneFrame, null, GrayF32.class); //More conversions
+ 
+		GrayU8 binary = new GrayU8(input.width,input.height);
+ 
+		// the mean pixel value is often a reasonable threshold when creating a binary image
+		double mean = ImageStatistics.mean(input);
+ 
+		// create a binary image by thresholding (binary is the output)
+		// Values <= mean go to 0.  Values > mean go to 1.
+		ThresholdImageOps.threshold(input, binary, (float) mean, false);
+ 
+		// reduce noise with some filtering (null = no output)
+		GrayU8 filtered = BinaryImageOps.erode8(binary, 1, null);
+		filtered = BinaryImageOps.dilate8(filtered, 1, null);
+ 
+		GrayS32 blobs = new GrayS32(filtered.width, filtered.height);
+		GrayU8 blobs2 = new GrayU8(filtered.width, filtered.height);
+		BufferedImage blobs3 = new BufferedImage(filtered.width,filtered.height,newFrame.getType());
+		
+		*/
+		
+		BufferedImage inFrame = sequence.NextFrame();
+		int frameNum=2;
+		while((inFrame = sequence.NextFrame())!=null) { //Fill up 'frames' with magnos
+
+			retina.ProcessFrame(RGBModel.maxContrast(inFrame));
+			BufferedImage magFrame = retina.getMagno(); //currFrame = magno version
+			
+			byte grayscale[][] = ImageUtils.BufferedImage2Grayscale(magFrame);
+			int gray[][] = Mat.Unsigned2Int(grayscale); //The frame is now an 2D int matrix
+		
+			//The following loop thresholds our 2D matrix of ints (<100 -> 0) (>100 -> 255) 
+			for(int i = 0; i < gray.length; i++) {
+				for(int j = 0; j < gray[i].length; j++) {
+
+					if(gray[i][j] < 100) gray[i][j] = 0;
+					else gray[i][j] = 255;
+
+				}
+			}
+			grayscale = Mat.Int2Unsigned(gray); //grayscale is the unsigned version of gray 
+			BufferedImage redoneFrame = ImageUtils.Grayscale2BufferedImage(grayscale, 255);
+			
+			
+			
+			
+			frames.add(redoneFrame);
+			//
+			
+
+			
+		}
+		
+		sequence.Close();
+		
+		
+		VideoFrameWriter mask = new VideoFrameWriter(new File(stemLoc), width, height, 30); 
+		mask.OpenFile(); //open videowriter
+
+		for(BufferedImage currFrame: frames){
+			
+			
+			
+			mask.ProcessFrame(currFrame);
+			Graphics2D g2 = currFrame.createGraphics();
+			
+			//SHOWS FRAME NUMBER
+			g2.setColor(Color.white);
+			g2.drawString(Integer.toString(frameNum), 20, 20);
+			g2.setStroke(new BasicStroke(3));
+			frameNum++;
+		}
+			
+		mask.Close();
+		
+		
+		
+		return stemLoc;
+		
+
+	}
+	
+	
 	
 	public void addFrameNum(String stemLoc, String vidLoc){
 		
@@ -3037,22 +3344,22 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		//p.boxvideos3(filePathOfVideo, "C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/gtasplit/gta ", 10); //split up videos are saved in folder "pacmansplit" with prefix "pac"
 		//String magnoStemLoc = "C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/Magnos/int9";
 		
-		String inputLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/virat10.mp4";						//what vid to handle? (vidLoc)
-		String magnoLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/virat10_magno.mp4";			//where to put result? (stemLoc)
-		String outvidLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/virat10_blah.mp4";			//where to put result? (stemLoc)
-		String magnoLoc2= "C:/Users/f002tj9/Documents/Research/kj/Output/virat10_TDout.mp4";			//where to put result?
-		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/Text/virat10_tubelist.txt";
+		String inputLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/gta5.mp4";						//what vid to handle? (vidLoc)
+		String magnoLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/gta5_threshmagno.mp4";			//where to put result? (stemLoc)
+		String outvidLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/gta5_out.mp4";			//where to put result? (stemLoc)
+		String magnoLoc2= "C:/Users/f002tj9/Documents/Research/kj/Output/gta5_TDout.mp4";			//where to put result?
+		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/Text/virat6_tubelist.txt";
 		
 
 		
-		p.magnoFilter(outvidLoc, inputLoc);
-		File tubefile = new File("C:/Users/f002tj9/Documents/Research/kj/TubeLists/" + CatGetter.stemOnly(inputLoc) + ".zip" );
-		ArrayList<ArrayList<double[]>> tubes = (ArrayList<ArrayList<double[]>>) FileIO.LoadObject(tubefile);
+		//p.magnoFilter(outvidLoc, inputLoc);
+		//File tubefile = new File("C:/Users/f002tj9/Documents/Research/kj/TubeLists/" + CatGetter.stemOnly(inputLoc) + ".zip" );
+		//ArrayList<ArrayList<double[]>> tubes = (ArrayList<ArrayList<double[]>>) FileIO.LoadObject(tubefile);
 		
 		
-		p.makeMagno(magnoLoc, inputLoc);
-		p.topDownMagno(tubes, magnoLoc2,magnoLoc, inputLoc);
-		p.tubeWriter(tubes, txtLoc);
+		p.makeThreshMagno(magnoLoc, inputLoc);
+		//p.topDownMagno(tubes, magnoLoc2,magnoLoc, inputLoc);
+		//p.tubeWriter(tubes, txtLoc);
 		
 		
 		 //p.addFrameNum(outvidLoc, inputLoc);
