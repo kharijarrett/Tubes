@@ -3,12 +3,14 @@ package tracker;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
 import java.awt.image.WritableRaster;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -25,6 +27,10 @@ import java.util.List;
 import java.util.ListIterator;
 import java.util.Set;
 import java.util.stream.*;
+
+import javax.swing.ImageIcon;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.math.plot.utils.Array;
@@ -51,6 +57,7 @@ import boofcv.struct.image.GrayS32;
 import boofcv.struct.image.GrayU8;
 import boofcv.struct.image.ImageGray;
 import common.FileIO;
+import common.UI;
 import common.math.Mat;
 import common.math.Vec;
 import common.utils.ImageUtils;
@@ -61,12 +68,15 @@ import georegression.struct.point.Point2D_F64;
 import georegression.struct.point.Point2D_I32;
 import georegression.struct.shapes.EllipseRotated_F64;
 import georegression.struct.shapes.Rectangle2D_I32;
+
+/*
 import ij.ImageStack;
 import ij.process.*;
-
 import inra.ijpb.morphology.*;
 import inra.ijpb.morphology.strel.CubeStrel;
 import inra.ijpb.morphology.strel.SquareStrel;
+
+*/
 
 import java.awt.Shape;
 
@@ -1584,16 +1594,1377 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		
 	}
 
-	/* This function writes out any ArrayList of ArrayLists of doubles out in a text file
-	 * Each inner ArrayList is separated by "Tube: XX"
-	 */
-	public void tubeWriter(ArrayList<ArrayList<double[]>> tubes, String textToGo) {
+
+	
+	
+	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
+	public ArrayList<ArrayList<double[]>> makeTubesFromMagno(ArrayList<BufferedImage> magnoStack, String inLoc, String outLoc) {
+		/* Given a list of images (presumed binary), this function creates and returns tubes.
+		 * inLoc and outLoc are used to show the tubes overlaid on the relevant vid
+		 * 
+		 */
 		
+		//Initialize an ArrayList to keep track of centers/velocities/colors
+		ArrayList<double[]> list = new ArrayList<double[]>();
 		
-		try {
-			PrintWriter writer = new PrintWriter(textToGo, "UTF-8");
+		//T frame;
+		int frameNum = 1;
+
+		//Initialize an ArrayList to keep track of centroids and list of sums
+		ArrayList<double[]> centroids = new ArrayList<double[]>();
+		List<Integer> sumList = new ArrayList();
+		List<Contour> contours;
+		
+		//How many frames to skip
+		int frameSkips = 5;
+		int cutoff = 0;
+		
+		//Initializing other stuff
+		GrayS32 blobsS32;
+		GrayU8 blobsU8;
+		GrayU8 magnoFrame;
+		GrayF32 magnoF2;
+		BufferedImage magnoBI;
+		GrayU8 filtered;
+		
+		/*
+		ArrayList<GrayF32> magStack = new ArrayList<GrayF32>();
+		for(BufferedImage mag: magnoStack){
+			GrayF32 magSlice = new GrayF32(mag.getWidth(),mag.getHeight());
+			ConvertBufferedImage.convertFrom(mag, magSlice);
+			magStack.add(magSlice);
+		}
+		*/
+		
+		for(BufferedImage magnoF: magnoStack){
+			
+			blobsS32 = new GrayS32(magnoF.getWidth(), magnoF.getHeight());
+			blobsU8 = new GrayU8(magnoF.getWidth(), magnoF.getHeight());
+			magnoFrame = new GrayU8(magnoF.getWidth(), magnoF.getHeight());
+			magnoF2 = new GrayF32(magnoF.getWidth(), magnoF.getHeight());
+			magnoBI = new BufferedImage(magnoF.getWidth(), magnoF.getHeight(), BufferedImage.TYPE_3BYTE_BGR);
+			
+			ConvertBufferedImage.convertFrom(magnoF, magnoF2);
+			
+			ThresholdImageOps.threshold(magnoF2, magnoFrame, (float) ImageStatistics.mean(magnoF2), false);
+			
+			filtered = BinaryImageOps.erode8(magnoFrame, 1, null);
+			BinaryImageOps.dilate8(filtered, 1, blobsU8);
+			
+			// Find the contour around the shapes using (null = no output)
+			contours = BinaryImageOps.contour(blobsU8, ConnectRule.EIGHT,blobsS32);
+
+			double R;
+			double G;
+			double B;
+
+			outerloop:
+			for( Contour c : contours ) { //For every contour
+
+				FitData<EllipseRotated_F64> ellipse = ShapeFittingOps.fitEllipse_I32(c.external,0,false,null); //Fit an algebraic ellipse
+				
+				//Calculate the sum (intensity value) for this contour
+				int sum = 0;
+				for(Point2D_I32 p: c.external) {
+					sum = sum + blobsS32.unsafe_get(p.getX(), p.getY());
+				}
+				sumList.add(sum); //Add this contour's sum to the list
+				
+				
+				//Eliminate some of the unnecessary contours
+				if (frameNum % 3365 == 0){ //every 5 frames (5 is arbitrary)
+					double P = .85;
+					Collections.sort(sumList);
+					if (sumList.size() > 1){
+						cutoff =  sumList.get((int) Math.ceil(sumList.size() * P));
+					}
+					else{
+						cutoff = 0;
+					}
+						
+				}
+					
+				if ((cutoff != 0) && (sum < cutoff)){
+					continue outerloop;
+				}
+				
+				int boxsize = Integer.max((int) ellipse.shape.a, (int) ellipse.shape.b); //distance from center to perpendicular edge
+				
+				if(boxsize < 6) continue; //If it's too small, skip to next contour
+				
+				 R = Math.random();
+				 G = Math.random();
+				 B = Math.random();
+				 
+				 //Storing the location, size, and frameNum of each ellipse (may include RGB later)
+				 //List item: [xloc, yloc, a, b, phi, frame, Vx, Vy, R,G,B]
+				 double[] info = {ellipse.shape.center.x, ellipse.shape.center.y, ellipse.shape.a, ellipse.shape.b, ellipse.shape.phi, (double) frameNum, 0, 0, 0, 0, 0};
+				 
+				 list.add(info);
+				
+
+              
+			} //End of "for every contour" loop
+			
+			if (frameNum % 5 == 0){
+				sumList.clear();
+			}
+
+			System.out.println("Finished processing frame " + frameNum + ", contours: " + contours.size());
+			frameNum++;
 
 			
+		} //End of "for every frame" loop
+		
+
+		//THIS IS WHERE WE START THE COMBINING AND TUBING STUFF
+		//------------------------------------------------------------------------------------------------------------------------
+		
+
+		//If already available... load ellipse list from file
+		//list = (ArrayList<double[]>) FileIO.LoadObject(file);
+		
+		
+		ArrayList<double[]> initials = new ArrayList<double[]>();
+		ArrayList<double[]> finals = new ArrayList<double[]>();
+		ArrayList<double[]> toBeAdded = new ArrayList<double[]>();
+		double istart = 6;
+		double iend = 10;
+		double fstart = 11;
+		double fend = 15;
+		
+		double r;
+		double sizediff;
+		double framediff;
+		double sizeThreshold = 50;
+		double locThreshold = 80;
+		double Vx;
+		double Vy;
+		double R;
+		double G;
+		double B;
+		ArrayList<ArrayList<double[]>> paths = new ArrayList<ArrayList<double[]>>();
+		boolean familiarFlag;
+		boolean matchFlag;
+		boolean addFlag;
+		double[] toAdd = new double[11];
+		
+		
+		while(fend + 10 < list.size()-1){//While there's more video left
+		
+			//Fill up the initials and finals lists
+			for(double[] e : list){
+				if((e[5] >= istart) && (e[5]<=iend)){
+					initials.add(e);
+				}
+				
+				if((e[5] >= fstart) && (e[5]<=fend)){
+					finals.add(e);
+				}
+			}
+			
+	
+			
+			iloop:
+			for(double[] i: initials){
+				for(double[] f: finals){
+				//f is the "final" instance of the ellipse. i is the "initial" one
+				matchFlag = false;
+					
+				r = Math.sqrt( Math.pow(f[0] -i[0], 2) + Math.pow(f[1] - i[1], 2));
+				sizediff = Integer.max((int) f[2], (int) f[3]) - Integer.max((int) i[2], (int) i[3]);
+				framediff = f[5] -i[5];
+				
+				//Make a match based on velocity info if it exists
+				if (i[6] != 0){
+					//Predict where it should be
+					double pred_x = i[6]*framediff + i[0];
+					double pred_y = i[7]*framediff + i[1];
+					if ((pred_x -50 < f[0] && f[0]< pred_x+50) && (pred_y -50 < f[1] && f[1]< pred_y+50)){
+						//If f is within 50 of our prediction
+						//Show us the match
+						matchFlag = true;
+					}
+				}
+				else{ //no velocity info (new)
+					if ((r<locThreshold) && (sizediff<sizeThreshold)){ //Within some size/loc threshold
+						//Show us the match
+						matchFlag = true;
+					}
+				}
+				
+				if (matchFlag){//if it's a match
+					
+	
+					if (i[8]== 0){//If it hasn't been assigned a color
+						//Give it a random color
+						i[8] = Math.random();
+						i[9] = Math.random();
+						i[10] = Math.random();
+					}
+					//Keeps paths the same color
+					f[8] = i[8];
+					f[9] = i[9];
+					f[10] = i[10];
+					
+					
+					// Calculating velocity:
+					// Final location - initial location / final frame - initial frame
+					f[6] = (f[0] - i[0])/framediff;
+					f[7] = (f[1] - i[1])/framediff;
+					
+					
+					//Add it into the path and add the path into the list of paths
+					ArrayList<double[]> path = new ArrayList<double[]>();
+					
+					familiarFlag = false;
+					addFlag = false;
+					
+					//Checks the rest of the initials for very close ellipses
+					for (int j= (int) i[5]+1; j<=iend; j++){
+						double r0 = 100000;
+						for (double[] init: initials){
+							
+							//Find the closest in the frame
+							if (init[5] ==j){ //if in the jth frame
+								
+								r = Math.sqrt( Math.pow(init[0] -i[0], 2) + Math.pow(init[1] - i[1], 2));
+								
+								if(r<r0){
+									toAdd = init;
+									r0 = r;
+								}	
+							}
+						}
+						if (r0<50){
+							//Keeps paths the same color
+							toAdd[8] = i[8];
+							toAdd[9] = i[9];
+							toAdd[10] = i[10];
+							addFlag = true;
+						}
+					}
+					
+					//path.addAll(toBeAdded);
+					
+					//Figure out if we've seen this before
+					for(ArrayList<double[]> a : paths){
+						for(double[] b : a){
+							
+							r = Math.sqrt( Math.pow(b[0] -i[0], 2) + Math.pow(b[1] - i[1], 2));
+							sizediff = Integer.max((int) b[2], (int) b[3]) - Integer.max((int) i[2], (int) i[3]);
+							
+							if ((Math.abs(i[5] - b[5]) <= 2) && ((r<80) && (sizediff<80))){
+								
+
+							
+								
+								//If we have then add it on the end of that path
+								if (addFlag){
+									a.add(toAdd);
+								}
+								a.add(f);
+								Collections.sort(a,new FrameComparator());
+								familiarFlag = true;
+								break;
+							}
+							
+						}
+					}
+					
+					//If we haven't then make a new path
+					if (!familiarFlag){
+						if (addFlag){
+							path.add(toAdd);
+						}
+						path.add(i);
+						path.add(f);
+						Collections.sort(path,new FrameComparator());
+						paths.add(path);
+					}
+
+					
+					
+					//Maybe clear out the final one so it can't be used again?
+					finals.remove(f);
+					
+					continue iloop;
+				}//closes matchFlag if
+				
+				}
+			}
+		
+			initials.clear();
+			finals.clear();
+			istart = istart + 5;
+			iend = iend + 5;
+			fstart = fstart + 5;
+			fend = fend + 5;
+		
+		}
+		
+		// END OF FIRST PASS (CREATES THE PATHS)
+		
+		
+		
+
+		ArrayList<ArrayList<double[]>> newpaths = new ArrayList<ArrayList<double[]>>();
+		boolean makePathFlag;
+		
+		
+		//This loop fixes paths so that they correspond to colors 
+		for (ArrayList<double[]> a: paths){
+			for (double[] b: a){
+				
+				R = b[8];
+				G = b[9];
+				B= b[10];
+				makePathFlag = true;
+				//pathToAdd.clear();
+				
+				for (ArrayList<double[]> newa: newpaths){
+					
+					if (newa.get(0)[8] != R){ //If this path doesn't have your color
+						continue;
+					}
+					else{
+						newa.add(b);
+						Collections.sort(newa, new FrameComparator());
+						makePathFlag = false;
+						break; 
+					}
+				}
+				
+				if(makePathFlag){
+					ArrayList<double[]> pathToAdd = new ArrayList<double[]>();
+					pathToAdd.add(b);
+					newpaths.add(pathToAdd);
+				}
+			}
+		}
+		
+		
+		//NEED TO REMOVE REPEATS FROM EVERY PATH
+		for (ArrayList<double[]> a: paths){
+
+			Set<double[]> hs = new HashSet<double[]>();
+			hs.addAll(a);
+			a.clear();
+			a.addAll(hs);
+			Collections.sort(a, new FrameComparator());
+		}
+		//OKAY DONE
+		
+		
+		
+		//newpaths is the paths variable now. It has been through only one pass.
+		//It doesn't contain repeat ellipses... Now, we gotta transform to tubes
+		
+
+		ArrayList<ArrayList<double[]>> tubes = new ArrayList<ArrayList<double[]>>();
+		double X,Y;
+		double Xsum,Ysum;
+//		double Xavg,Yavg;
+		double Amax,Bmax;
+		double Asum,Bsum;
+		double Aavg,Bavg;
+		double Rotavg,Vxavg,Vyavg;
+		double Rotsum,Vxsum,Vysum;
+		boolean exactFrameFlag;
+		double lastframe = 0;
+		
+		
+		//This loop makes tubes out of the paths
+		for (ArrayList<double[]> thispath : newpaths){
+			
+			//Make a new tube object
+			ArrayList<double[]> tube = new ArrayList<double[]>();
+			
+			
+			for(int f = (int) thispath.get(0)[5]; f < thispath.get(thispath.size()-1)[5]  ;f++) { //for every frame in the path
+				
+				
+				if (f>= lastframe){
+					lastframe = f;
+				}
+				
+				//New chunk and new variables
+				ArrayList<double[]> chunk = new ArrayList<double[]>();
+				ArrayList<double[]> chunksmall = new ArrayList<double[]>();
+				ArrayList<double[]> chunkmed = new ArrayList<double[]>();
+				ArrayList<double[]> chunklarge = new ArrayList<double[]>();
+				Amax = 0;
+				Bmax = 0;
+				Asum = 0;
+				Bsum = 0;
+				Rotsum = 0;
+				Rotavg = 0;
+				Vxsum = 0;
+				Vysum = 0;
+				X= 0;
+				Y= 0;
+				R = thispath.get(0)[8];
+				
+				G = thispath.get(0)[9];
+				B = thispath.get(0)[10];
+				
+				//Fill up chunk with ellipses up to 15 frames away either way
+				for (double[] e : thispath){
+					if (Math.abs(e[5] - f) <= 15) {
+						chunk.add(e);
+					}
+				}
+				
+				if (chunk.isEmpty()){
+					//Then we in a big ass gap and we gotta finesse
+					//ADD FINESSE
+				}
+				
+
+				for(double[] e : chunk){
+					
+					//These ifs sort ellipses into sub chunks for X/Y stuff
+					if(Math.abs(e[5] -f) <= 2){
+						chunksmall.add(e);
+					}
+					if (Math.abs(e[5] -f) <= 5){
+						chunkmed.add(e);
+					}
+					if (Math.abs(e[5] -f) <= 10){
+						chunklarge.add(e);
+					}
+					
+					//Keep track of the maximum A,B and keep sum of Rot, Vx, and Vy
+					if (e[2] > Amax){
+						Amax = e[2];
+					}
+					if (e[3] > Bmax){
+						Bmax = e[3];
+					}
+					
+					Asum = Asum + e[2];
+					Bsum = Bsum + e[3];
+					//Rotsum = Rotsum + e[4];
+					Vxsum = Vxsum + e[6];
+					Vysum = Vysum + e[7];
+					
+				} //Done going through ellipses in chunk
+				
+				Aavg = Asum/chunk.size();
+				Bavg = Bsum/chunk.size();
+				//Rotavg = Rotsum/chunk.size();
+				Vxavg = Vxsum/chunk.size();
+				Vyavg = Vysum/chunk.size();
+				
+				//Here, we check 2/5/10 frames away for ellipses and decide on X/Y values
+				//If there's nothing in that exact frame we take an avg of the surrounding 2/5/10 frames
+				Xsum = 0;
+				Ysum = 0;
+				exactFrameFlag = false;
+				if (!chunksmall.isEmpty()){
+					//Sum up Xs and Ys and take avg
+					for (double[] e : chunksmall){
+						Xsum = Xsum + e[0];
+						Ysum = Ysum + e[1];
+						Rotavg = e[4];
+						
+						if (e[5] == f){
+							exactFrameFlag = true;
+							X = e[0];
+							Y = e[1];
+							Rotavg = e[4];
+							break;
+						}
+					}
+					if (!exactFrameFlag){
+						X = Xsum/chunksmall.size();
+						Y = Ysum/chunksmall.size();	
+						//Rotavg = Rotsum/chunksmall.size();
+					}
+				}
+				
+				else if (!chunkmed.isEmpty()){
+					//Sum up Xs and Ys and take avg
+					for (double[] e : chunkmed){
+						Xsum = Xsum + e[0];
+						Ysum = Ysum + e[1];
+						Rotavg = e[4];
+					}
+					X = Xsum/chunkmed.size();
+					Y = Ysum/chunkmed.size();
+					//Rotavg = Rotsum/chunkmed.size();
+				} 
+				
+				else if (!chunklarge.isEmpty()){
+					//Sum up Xs and Ys and take avg
+					for (double[] e : chunklarge){
+						Xsum = Xsum + e[0];
+						Ysum = Ysum + e[1];
+						Rotavg = e[4];
+					}
+					X = Xsum/chunklarge.size();
+					Y = Ysum/chunklarge.size();
+					//Rotavg = Rotsum/chunklarge.size();
+				}
+				
+				else{
+					for (double[] e : chunk){
+						Xsum = Xsum + e[0];
+						Ysum = Ysum + e[1];
+						//Rotsum = Rotsum + e[4];
+					}
+					X = Xsum/chunk.size();
+					Y = Ysum/chunk.size();
+					//Rotavg = Rotsum/chunk.size();
+				}
+				
+				//Add a slice of the tube for frame f
+				double[] tubeslice = {X,Y,Amax*1.2,Bmax*1.2,Rotavg,f,Vxavg,Vyavg,R,G,B};
+				tube.add(tubeslice);
+
+			}//End for every frame loop
+			
+			tubes.add(tube);
+		}//Now tubes is the object of concern.  
+		
+		
+		//This part is to get rid of faulty tubes (like the all black one)
+		ArrayList<ArrayList<double[]>> toRemove = new ArrayList<ArrayList<double[]>>();
+		for(ArrayList<double[]> tube : tubes){
+			
+			if((!tube.isEmpty()) && (tube.get(0)[8] == 0)){ //if not empty and the color is somehow empty
+				toRemove.add(tube);
+			}
+		}
+		tubes.removeAll(toRemove);
+		
+		
+		//------------------------------- SECOND PASS ----------------------------------------
+		
+		ArrayList<ArrayList<double[]>> newtubes = new ArrayList<ArrayList<double[]>>();
+		ArrayList<double[]> ipath;
+		ArrayList<double[]> jpath;
+		ArrayList<double[]> toConnect = new ArrayList<double[]>();
+		ArrayList<double[]> oldConnect = new ArrayList<double[]>();
+		ArrayList<double[]> oldj = new ArrayList<double[]>();		
+		double[] toCheck;
+		double superVx;
+		double superVy;
+		double backsuperVx;
+		double backsuperVy;
+		double predx;
+		double predy;
+		double predf;
+		double backpredx;
+		double backpredy;
+		double backpredf;
+		double lookahead = 5;
+		
+		
+		//This big ass for loop takes things from tubes to newtubes
+		//(takes small paths and connects them into bigger ones)
+		for (int i = 0;i<= tubes.size()-1; i++){
+			
+			//The ith path in paths
+			ipath = tubes.get(i);
+			Collections.sort(ipath,new FrameComparator());
+			
+			if (ipath.size() < 10){
+				continue;
+			}
+			
+
+			
+			//Look at velocities of last 5 ellipses in path and take avg
+			superVx = (ipath.get(ipath.size()-1)[6] + ipath.get(ipath.size()-2)[6] + ipath.get(ipath.size()-3)[6] + ipath.get(ipath.size()-4)[6] + ipath.get(ipath.size()-5)[6])/5;
+			superVy = (ipath.get(ipath.size()-1)[7] + ipath.get(ipath.size()-2)[7] + ipath.get(ipath.size()-3)[7] + ipath.get(ipath.size()-4)[7] + ipath.get(ipath.size()-5)[7])/5;
+			
+			//Look at velocities of first 5 ellipses in path and take avg
+			backsuperVx = (ipath.get(0)[6] + ipath.get(1)[6] + ipath.get(2)[6] + ipath.get(3)[6] + ipath.get(4)[6])/5;
+			backsuperVy = (ipath.get(0)[7] + ipath.get(1)[7] + ipath.get(2)[7] + ipath.get(3)[7] + ipath.get(4)[7])/5;
+			
+			//Make prediction about where it'll be in (lookahead) frames
+			predx = (ipath.get(ipath.size()-1)[0] + ipath.get(ipath.size()-2)[0] + ipath.get(ipath.size()-3)[0])/3 + (superVx * lookahead);
+			predy = (ipath.get(ipath.size()-1)[1] + ipath.get(ipath.size()-2)[1] + ipath.get(ipath.size()-3)[1])/3 + (superVy * lookahead);
+			predf = ipath.get(ipath.size()-1)[5] + lookahead;
+			
+			//Make prediction about where it'll be in (lookahead) frames
+			backpredx = (ipath.get(0)[0] + ipath.get(1)[0] + ipath.get(2)[0])/3 - (backsuperVx * lookahead);
+			backpredy = (ipath.get(0)[1] + ipath.get(1)[1] + ipath.get(2)[1])/3 - (backsuperVy * lookahead);
+			backpredf = ipath.get(0)[5] - lookahead;
+			
+			
+			double r0 = 10000;
+			
+			for(int j = 1;j <= tubes.size()-1; j++){
+				
+				//The jth path in paths
+				jpath = tubes.get(j);
+				Collections.sort(jpath, new FrameComparator());
+				
+				if(jpath.equals(oldj)){
+					continue;
+				}
+				
+				if (jpath.size() < 10){
+					continue;
+				}
+				
+				if (j==i){
+					continue;
+				}
+				
+				for(double[] e: jpath){ //For every ellipse in jpath
+					
+					if(Math.abs(e[5]-predf) <= 5){// That is (at most) 5 away from prediction frame
+						
+						//See if the location is close...
+						r = Math.sqrt( Math.pow(e[0] -predx, 2) + Math.pow(e[1] - predy, 2));
+												
+						if ((r<r0) && (Math.abs(e[6] - superVx) < 2) && (Math.abs(e[7] - superVy) < 2)) { 
+							toCheck = e;
+							r0 = r;
+						}
+						//The one with the closest is the right jpath (as long as it's X close)
+					}
+					
+					if(Math.abs(e[5]-backpredf) <= 5){// That is (at most) 5 away from prediction frame
+					
+						//See if the location is close...
+						r = Math.sqrt( Math.pow(e[0] -backpredx, 2) + Math.pow(e[1] - backpredy, 2));
+						
+						if ((r<r0) && (Math.abs(e[6] - backsuperVx) < 2) && (Math.abs(e[7] - backsuperVy) < 2)) { 
+							toCheck = e;
+							r0 = r;
+						}
+					}
+				} //After going thru all ellipses in jpath
+				
+				oldj = jpath;
+				
+				if (r0<100){
+					toConnect = jpath;
+					break;
+				}
+				else{
+					oldConnect = toConnect;
+					continue;
+				}
+
+				
+				
+			} //end of going through js
+			
+			if(!toConnect.isEmpty() && (!oldConnect.equals(toConnect)) ) { 
+				
+				
+				//Calculate velocity of each to make sure they're going in the same direction
+				//Velocity of ipath
+				double VxsumI = 0;
+				double VysumI = 0;
+				for(double[] E : ipath){
+					VxsumI = VxsumI + E[6];
+					VysumI = VysumI + E[7];
+				}
+				double VxavgI = VxsumI / ipath.size();
+				double VyavgI = VysumI / ipath.size();
+				
+				//Velocity of toConnect
+				double VxsumJ = 0;
+				double VysumJ = 0;
+				for(double[] F : toConnect){
+					VxsumJ = VxsumJ + F[6];
+					VysumJ = VysumJ + F[7];
+				}
+				double VxavgJ = VxsumJ / toConnect.size();
+				double VyavgJ = VysumJ / toConnect.size();
+				
+				if ( (VxavgI/VxavgJ > 0) &&   ((VyavgI/VyavgJ > 0) ||  ((Math.abs(VyavgI)<1) && (Math.abs(VyavgJ)<1)) ) ){ //to check direction
+					//MAKE A THIRD PATHS OBJECT AND COMBINE PATHS INTO THERE 
+					
+					
+					ArrayList<double[]> superTube = new ArrayList<double[]>();
+					
+					//Maybe check thirdpaths for the first ellipse in ipath.  If there, nah
+					double[] checkFor = ipath.get(0); 
+						
+					superTube.addAll(ipath);
+					superTube.addAll(toConnect);
+					Collections.sort(superTube, new FrameComparator());
+					
+					
+					//HERE! Check for duplicates in a single frame of supertube and if there is, pick whichever is most like toConnect
+					//-------------------------------------------------------------------------------------------------------
+					ArrayList<double[]> toDelete = new ArrayList<double[]>();
+					
+					for (int f = 0; f<= lastframe; f++){
+						
+						
+						
+						ArrayList<double[]> similarSlices = new ArrayList<double[]>();
+	
+						for (double[] tubeslice: superTube){ //This collects same color ellipses in the same frame
+							if (tubeslice[5] == f){
+								similarSlices.add(tubeslice);
+							}
+						}
+						
+						if (similarSlices.size()>1){ 
+							
+							if (f==306){
+								System.out.println("306!");
+							}
+							
+							double[] compareSlice = new double[11];
+							double[] worstslice = new double[11];
+							
+							for (double[] tubeslice : superTube){
+								
+								if (tubeslice[5] == f + 25){
+									compareSlice = tubeslice;
+									break;
+								}
+								
+							}
+							
+							
+							
+							//Mark for deletion everything but the slice closest to where it will be
+							r0 = 0;
+							for (double[] slice: similarSlices){ 
+
+								r = Math.sqrt( Math.pow(slice[0] -compareSlice[0], 2) + Math.pow(slice[1] - compareSlice[1], 2));
+								if (r> r0){
+									worstslice = slice;
+								}
+							}
+							
+							toDelete.add(worstslice);
+						}
+						superTube.removeAll(toDelete);
+						
+						for (ArrayList<double[]> tube : newtubes){
+							if (tube.contains(toDelete)){
+								tube.remove(toDelete);
+							}
+						}
+					}
+					
+					
+					
+					Collections.sort(superTube, new FrameComparator());
+					//Okay done-----------------------------------------------------------------------------------------------------
+					
+					
+					R = superTube.get(0)[8];
+					G = superTube.get(0)[9];
+					B = superTube.get(0)[10];
+					for (double[] E : superTube){
+						E[8] = R;
+						E[9] = G;
+						E[10]= B;
+					}
+	
+					newtubes.add(superTube);
+
+				}
+				else{
+					newtubes.add(ipath);
+				}
+				
+			}//end of if toConnect isn't empty...
+			
+			else{
+				newtubes.add(ipath);
+			}
+		}
+		
+		//----------------------------- END OF SECOND PASS ----------------------------------------
+		
+		
+		
+		ArrayList<double[]> itube = new ArrayList<double[]>();
+		ArrayList<double[]> jtube = new ArrayList<double[]>();
+		ArrayList<ArrayList<double[]>> tubesToDelete = new ArrayList<ArrayList<double[]>>();
+		ArrayList<double[]> slicesToDelete = new ArrayList<double[]>();
+		
+		ArrayList<ArrayList<double[]>> newtubes2 = newtubes;
+		
+		//Deleting empty tubes in newtubes
+		for(ArrayList<double[]> tube : newtubes2){
+			if (tube.isEmpty()){
+				tubesToDelete.add(tube);
+			}
+		}
+		newtubes2.removeAll(tubesToDelete);
+		
+		
+
+		
+		
+		
+		//----------------------------------- THIRD PASS ----------------------------------------
+		
+			ArrayList<ArrayList<double[]>> thirdtubes = new ArrayList<ArrayList<double[]>>();
+			toConnect = new ArrayList<double[]>();
+			oldConnect = new ArrayList<double[]>();
+			oldj = new ArrayList<double[]>();		
+			lookahead = 25;
+			
+			
+			//This big ass for loop takes things from tubes to newtubes
+			//(takes small paths and connects them into bigger ones)
+			for (int i = 0;i<= newtubes2.size()-1; i++){
+				
+				//The ith path in paths
+				ipath = newtubes2.get(i);
+				Collections.sort(ipath,new FrameComparator());
+				
+				if (ipath.size() < 10){
+					continue;
+				}
+				
+
+				
+				//Look at velocities of last 5 ellipses in path and take avg
+				superVx = (ipath.get(ipath.size()-1)[6] + ipath.get(ipath.size()-2)[6] + ipath.get(ipath.size()-3)[6] + ipath.get(ipath.size()-4)[6] + ipath.get(ipath.size()-5)[6])/5;
+				superVy = (ipath.get(ipath.size()-1)[7] + ipath.get(ipath.size()-2)[7] + ipath.get(ipath.size()-3)[7] + ipath.get(ipath.size()-4)[7] + ipath.get(ipath.size()-5)[7])/5;
+				
+				//Look at velocities of first 5 ellipses in path and take avg
+				backsuperVx = (ipath.get(0)[6] + ipath.get(1)[6] + ipath.get(2)[6] + ipath.get(3)[6] + ipath.get(4)[6])/5;
+				backsuperVy = (ipath.get(0)[7] + ipath.get(1)[7] + ipath.get(2)[7] + ipath.get(3)[7] + ipath.get(4)[7])/5;
+				
+				//Make prediction about where it'll be in (lookahead) frames
+				predx = (ipath.get(ipath.size()-1)[0] + ipath.get(ipath.size()-2)[0] + ipath.get(ipath.size()-3)[0])/3 + (superVx * lookahead);
+				predy = (ipath.get(ipath.size()-1)[1] + ipath.get(ipath.size()-2)[1] + ipath.get(ipath.size()-3)[1])/3 + (superVy * lookahead);
+				predf = ipath.get(ipath.size()-1)[5] + lookahead;
+				
+				//Make prediction about where it'll be in (lookahead) frames
+				backpredx = (ipath.get(0)[0] + ipath.get(1)[0] + ipath.get(2)[0])/3 - (backsuperVx * lookahead);
+				backpredy = (ipath.get(0)[1] + ipath.get(1)[1] + ipath.get(2)[1])/3 - (backsuperVy * lookahead);
+				backpredf = ipath.get(0)[5] - lookahead;
+				
+				
+				double r0 = 10000;
+				
+				for(int j = 1;j <= newtubes2.size()-1; j++){
+					
+					//The jth path in paths
+					jpath = newtubes2.get(j);
+					Collections.sort(jpath, new FrameComparator());
+					
+					if(jpath.equals(oldj)){
+						continue;
+					}
+					
+					if (jpath.size() < 10){
+						continue;
+					}
+					
+					if (j==i){
+						continue;
+					}
+					
+					for(double[] e: jpath){ //For every ellipse in jpath
+						
+						if(Math.abs(e[5]-predf) <= 5){// That is (at most) 5 away from prediction frame
+							
+							//See if the location is close...
+							r = Math.sqrt( Math.pow(e[0] -predx, 2) + Math.pow(e[1] - predy, 2));
+													
+							if ((r<r0) && (Math.abs(e[6] - superVx) < 2) && (Math.abs(e[7] - superVy) < 2)) { 
+								toCheck = e;
+								r0 = r;
+							}
+							//The one with the closest is the right jpath (as long as it's X close)
+						}
+						
+						if(Math.abs(e[5]-backpredf) <= 5){// That is (at most) 5 away from prediction frame
+						
+							//See if the location is close...
+							r = Math.sqrt( Math.pow(e[0] -backpredx, 2) + Math.pow(e[1] - backpredy, 2));
+							
+							if ((r<r0) && (Math.abs(e[6] - backsuperVx) < 2) && (Math.abs(e[7] - backsuperVy) < 2)) { 
+								toCheck = e;
+								r0 = r;
+							}
+						}
+					} //After going thru all ellipses in jpath
+					
+					oldj = jpath;
+					
+					if (r0<100){
+						toConnect = jpath;
+						break;
+					}
+					else{
+						oldConnect = toConnect;
+						continue;
+					}
+
+					
+					
+				} //end of going through js
+				
+				if(!toConnect.isEmpty() && (!oldConnect.equals(toConnect)) ) { 
+					
+					
+					//Calculate velocity of each to make sure they're going in the same direction
+					//Velocity of ipath
+					double VxsumI = 0;
+					double VysumI = 0;
+					for(double[] E : ipath){
+						VxsumI = VxsumI + E[6];
+						VysumI = VysumI + E[7];
+					}
+					double VxavgI = VxsumI / ipath.size();
+					double VyavgI = VysumI / ipath.size();
+					
+					//Velocity of toConnect
+					double VxsumJ = 0;
+					double VysumJ = 0;
+					for(double[] F : toConnect){
+						VxsumJ = VxsumJ + F[6];
+						VysumJ = VysumJ + F[7];
+					}
+					double VxavgJ = VxsumJ / toConnect.size();
+					double VyavgJ = VysumJ / toConnect.size();
+					
+					if ( (VxavgI/VxavgJ > 0) &&   ((VyavgI/VyavgJ > 0) ||  ((Math.abs(VyavgI)<1) && (Math.abs(VyavgJ)<1)) ) ){ //to check direction
+						//MAKE A THIRD PATHS OBJECT AND COMBINE PATHS INTO THERE 
+						
+						
+						ArrayList<double[]> superTube = new ArrayList<double[]>();
+						
+						//Maybe check thirdpaths for the first ellipse in ipath.  If there, nah
+						double[] checkFor = ipath.get(0); 
+							
+						superTube.addAll(ipath);
+						superTube.addAll(toConnect);
+						Collections.sort(superTube, new FrameComparator());
+						
+						R = superTube.get(0)[8];
+						G = superTube.get(0)[9];
+						B = superTube.get(0)[10];
+						for (double[] E : superTube){
+							E[8] = R;
+							E[9] = G;
+							E[10]= B;
+						}
+		
+						thirdtubes.add(superTube);
+
+					}
+					else{
+						thirdtubes.add(ipath);
+					}
+					
+				}//end of if toConnect isn't empty...
+				
+				else{
+					thirdtubes.add(ipath);
+				}
+			}
+		
+//--------------------------------- END OF THIRD PASS --------------------------------------------
+			
+			
+			
+//--------------------------------------- FOURTH PASS --------------------------------------------
+			
+			ArrayList<ArrayList<double[]>> fourthtubes = new ArrayList<ArrayList<double[]>>();
+			toConnect = new ArrayList<double[]>();
+			oldConnect = new ArrayList<double[]>();
+			oldj = new ArrayList<double[]>();		
+			lookahead = 60;
+			
+			
+			//This big ass for loop takes things from tubes to newtubes
+			//(takes small paths and connects them into bigger ones)
+			for (int i = 0;i<= thirdtubes.size()-1; i++){
+				
+				//The ith path in paths
+				ipath = thirdtubes.get(i);
+				Collections.sort(ipath,new FrameComparator());
+				
+				if (ipath.size() < 10){
+					continue;
+				}
+				
+				//Look at velocities of last 5 ellipses in path and take avg
+				superVx = (ipath.get(ipath.size()-1)[6] + ipath.get(ipath.size()-2)[6] + ipath.get(ipath.size()-3)[6] + ipath.get(ipath.size()-4)[6] + ipath.get(ipath.size()-5)[6])/5;
+				superVy = (ipath.get(ipath.size()-1)[7] + ipath.get(ipath.size()-2)[7] + ipath.get(ipath.size()-3)[7] + ipath.get(ipath.size()-4)[7] + ipath.get(ipath.size()-5)[7])/5;
+				
+				//Look at velocities of first 5 ellipses in path and take avg
+				backsuperVx = (ipath.get(0)[6] + ipath.get(1)[6] + ipath.get(2)[6] + ipath.get(3)[6] + ipath.get(4)[6])/5;
+				backsuperVy = (ipath.get(0)[7] + ipath.get(1)[7] + ipath.get(2)[7] + ipath.get(3)[7] + ipath.get(4)[7])/5;
+				
+				//Make prediction about where it'll be in (lookahead) frames
+				predx = (ipath.get(ipath.size()-1)[0] + ipath.get(ipath.size()-2)[0] + ipath.get(ipath.size()-3)[0])/3 + (superVx * lookahead);
+				predy = (ipath.get(ipath.size()-1)[1] + ipath.get(ipath.size()-2)[1] + ipath.get(ipath.size()-3)[1])/3 + (superVy * lookahead);
+				predf = ipath.get(ipath.size()-1)[5] + lookahead;
+				
+				//Make prediction about where it'll be in (lookahead) frames
+				backpredx = (ipath.get(0)[0] + ipath.get(1)[0] + ipath.get(2)[0])/3 - (backsuperVx * lookahead);
+				backpredy = (ipath.get(0)[1] + ipath.get(1)[1] + ipath.get(2)[1])/3 - (backsuperVy * lookahead);
+				backpredf = ipath.get(0)[5] - lookahead;
+				
+				
+				double r0 = 10000;
+				
+				for(int j = 1;j <= thirdtubes.size()-1; j++){
+					
+					//The jth path in paths
+					jpath = thirdtubes.get(j);
+					Collections.sort(jpath, new FrameComparator());
+					
+					if(jpath.equals(oldj)){
+						continue;
+					}
+					
+					if (jpath.size() < 10){
+						continue;
+					}
+					
+					if (j==i){
+						continue;
+					}
+					
+					for(double[] e: jpath){ //For every ellipse in jpath
+						
+						if(Math.abs(e[5]-predf) <= 5){// That is (at most) 5 away from prediction frame
+							
+							//See if the location is close...
+							r = Math.sqrt( Math.pow(e[0] -predx, 2) + Math.pow(e[1] - predy, 2));
+													
+							if ((r<r0) && (Math.abs(e[6] - superVx) < 2) && (Math.abs(e[7] - superVy) < 2)) { 
+								toCheck = e;
+								r0 = r;
+							}
+							//The one with the closest is the right jpath (as long as it's X close)
+						}
+						
+						if(Math.abs(e[5]-backpredf) <= 5){// That is (at most) 5 away from prediction frame
+						
+							//See if the location is close...
+							r = Math.sqrt( Math.pow(e[0] -backpredx, 2) + Math.pow(e[1] - backpredy, 2));
+							
+							if ((r<r0) && (Math.abs(e[6] - backsuperVx) < 2) && (Math.abs(e[7] - backsuperVy) < 2)) { 
+								toCheck = e;
+								r0 = r;
+							}
+						}
+					} //After going thru all ellipses in jpath
+					
+					oldj = jpath;
+					
+					if (r0<100){
+						toConnect = jpath;
+						break;
+					}
+					else{
+						oldConnect = toConnect;
+						continue;
+					}
+
+					
+					
+				} //end of going through js
+				
+				if(!toConnect.isEmpty() && (!oldConnect.equals(toConnect)) ) { 
+					
+					
+					//Calculate velocity of each to make sure they're going in the same direction
+					//Velocity of ipath
+					double VxsumI = 0;
+					double VysumI = 0;
+					for(double[] E : ipath){
+						VxsumI = VxsumI + E[6];
+						VysumI = VysumI + E[7];
+					}
+					double VxavgI = VxsumI / ipath.size();
+					double VyavgI = VysumI / ipath.size();
+					
+					//Velocity of toConnect
+					double VxsumJ = 0;
+					double VysumJ = 0;
+					for(double[] F : toConnect){
+						VxsumJ = VxsumJ + F[6];
+						VysumJ = VysumJ + F[7];
+					}
+					double VxavgJ = VxsumJ / toConnect.size();
+					double VyavgJ = VysumJ / toConnect.size();
+					
+					if ( (VxavgI/VxavgJ > 0) &&   ((VyavgI/VyavgJ > 0) ||  ((Math.abs(VyavgI)<1) && (Math.abs(VyavgJ)<1)) ) ){ //to check direction
+						//MAKE A THIRD PATHS OBJECT AND COMBINE PATHS INTO THERE 
+						
+						
+						ArrayList<double[]> superTube = new ArrayList<double[]>();
+						
+						//Maybe check thirdpaths for the first ellipse in ipath.  If there, nah
+						double[] checkFor = ipath.get(0); 
+							
+						superTube.addAll(ipath);
+						superTube.addAll(toConnect);
+						Collections.sort(superTube, new FrameComparator());
+						
+						R = superTube.get(0)[8];
+						G = superTube.get(0)[9];
+						B = superTube.get(0)[10];
+						for (double[] E : superTube){
+							E[8] = R;
+							E[9] = G;
+							E[10]= B;
+						}
+		
+						fourthtubes.add(superTube);
+
+					}
+					else{
+						fourthtubes.add(ipath);
+					}
+					
+				}//end of if toConnect isn't empty...
+				
+				else{
+					fourthtubes.add(ipath);
+				}
+			}
+
+		
+//-------------------------------- END OF FOURTH PASS -------------------------------------------
+			
+			
+		/*Iterates thru tubes and handles the situation where multiple tubes (same color)
+		 *have a slice at the same time. 
+		 *
+		 *Note: Same color creates double representation
+		 *
+		 **/
+		for (int i = 0;i<= fourthtubes.size()-1; i++){
+			for(int j = i;j <= fourthtubes.size()-1; j++){
+				
+				if (i==j){
+					continue;
+				}
+				
+				//Get the tubes
+				itube = fourthtubes.get(i);
+				jtube = fourthtubes.get(j);
+				
+				if (itube.isEmpty() || jtube.isEmpty()){
+					continue;
+				}
+									
+				double[] islice = new double[11];
+				double[] jslice = new double[11];
+				
+				for(int f =0; f<=lastframe;f++){
+					for(double[] e: itube){ //Find the slice in itube
+						if (e[5] == f){
+							islice = e;
+							break;
+						}
+					}
+					for(double[] e: jtube){ //Find the slice in jtube
+						if (e[5] == f){
+							jslice = e;
+							break;
+						}
+					}
+					
+					if (islice[8] == jslice[8]){
+						if (itube.size()>jtube.size()){
+							jtube.remove(jslice);
+						}
+						else{
+							itube.remove(islice);
+						}
+					}
+				}//end of "for every frame" loop
+			}
+		}
+				
+		
+	
+		//This part is to get rid of empty tubes (and keeps color continuous throughout tube
+		toRemove = new ArrayList<ArrayList<double[]>>();
+		for(ArrayList<double[]> tube : fourthtubes){
+			
+			//Take out empty tube
+			if(tube.isEmpty()){
+				toRemove.add(tube);
+				continue;
+			}
+			
+			R = tube.get(0)[8];
+			G = tube.get(0)[9];
+			B = tube.get(0)[10];
+			
+			for(double[] slice: tube){
+				slice[8] = R;
+				slice[9] = G;
+				slice[10]= B;
+			}
+		}
+		fourthtubes.removeAll(toRemove);
+		
+		
+		
+		double maj;
+		double min;
+		double phi;
+		
+		//This part is to fill in gaps within tubes
+		for(ArrayList<double[]> tube : fourthtubes){
+			toBeAdded.clear();
+			ArrayList<double[]> toBeRemoved = new ArrayList<double[]>();
+			
+			for(double[] slice : tube){
+				double[] currSlice = slice;
+				double[] nextSlice;
+				
+				try{ //if there's a next slice, get it. If not, jump outta this for loop
+					nextSlice = tube.get(tube.indexOf(currSlice) + 1);
+				}catch(IndexOutOfBoundsException e){
+					break;
+				}
+				
+				//Get the frame number for each
+				double currF = currSlice[5];
+				double nextF = nextSlice[5];
+				
+				if (currF == 620){
+					System.out.println("BLAH");
+				}
+				
+				if (nextF == currF){ //If there's a duplicate
+					if (currSlice[2]*currSlice[3] > nextSlice[2]*nextSlice[3]){
+						toBeRemoved.add(nextSlice);
+					}
+					else if(currSlice[2]*currSlice[3] < nextSlice[2]*nextSlice[3]) {
+						toBeRemoved.add(currSlice);
+					}
+					else{
+					}
+					
+					continue;
+				}
+				
+				if (nextF - currF == 1){
+					continue;
+				}
+				else{ //if there is a gap between slices
+					//FILL IT IN
+					for (int f = (int)currF+1; f<nextF;f++){
+						framediff = f - currF;
+						
+						//Make the new slice
+						X = (nextSlice[0] - currSlice[0]) * (framediff/(nextF - currF)) + currSlice[0];
+						Y = (nextSlice[1] - currSlice[1]) * (framediff/(nextF - currF)) + currSlice[1];
+						maj = (nextSlice[2] - currSlice[2]) * (framediff/(nextF - currF)) + currSlice[2];
+						min = (nextSlice[3] - currSlice[3]) * (framediff/(nextF - currF)) + currSlice[3];
+						phi =(nextSlice[4] - currSlice[4]) * (framediff/(nextF - currF)) + currSlice[4];
+						Vx = (X - currSlice[0])/framediff;
+						Vy = (Y - currSlice[1])/framediff;
+						R = currSlice[8];
+						G = currSlice[9];
+						B = currSlice[10];
+						
+						//...and add it in this tube
+						double[] newSlice = {X,Y,maj,min,phi,f,Vx,Vy,R,G,B};
+						toBeAdded.add(newSlice);
+
+					}
+				}
+				
+			}
+			
+			//Sort slices to make sure they're in order again
+			tube.addAll(toBeAdded);
+			tube.removeAll(toBeRemoved);
+			//Remove repeats from tube
+			Set<double[]> set = new HashSet<double[]>();
+			set.addAll(tube);
+			tube.clear();
+			tube.addAll(set);
+			Collections.sort(tube,new FrameComparator());
+		}
+
+
+		//----------------------------GRAPHICS STUFF----------------------------------------------
+		VideoFrameReader sequence = new VideoFrameReader(inLoc);
+		sequence.OpenFile();
+		
+		int height = sequence.getFrameHeight();
+		int width = sequence.getFrameWidth(); 
+
+		
+		VideoFrameWriter mask = new VideoFrameWriter(new File(outLoc), width, height, 30); 
+		VideoRetina retina = new VideoRetina(width, height, false); //create retina
+
+		mask.OpenFile(); //open videowriter
+		
+		//This part shows the video on screen
+		gui.setPreferredSize(new Dimension(width, height));
+		ShowImages.showWindow(gui,CatGetter.extract(inLoc), true);
+		
+		BufferedImage newFrame = sequence.NextFrame();
+		frameNum=2;
+		EllipseRotated_F64 ellipse;
+		while((newFrame = sequence.NextFrame())!=null) {
+			
+			
+			Graphics2D g2 = newFrame.createGraphics(); 
+			
+			g2.setColor(Color.white);
+			g2.drawString(Integer.toString(frameNum), 20, 20);
+			g2.setStroke(new BasicStroke(3));
+			
+			//PUT OBJECT OF INTEREST BELOW
+			for(ArrayList<double[]> a : fourthtubes){ 
+				for(double[] b : a){
+					
+					if (b[5] ==frameNum){ //if this is your frame
+												
+						//Make new ellipse with (x0, y0, a, b, rotation)
+						ellipse = new EllipseRotated_F64(b[0], b[1], b[2], b[3], b[4]);
+						g2.setColor(new Color((float) b[8],(float) b[9], (float) b[10]));
+						g2.setStroke(new BasicStroke(3));  //thick tubes
+						VisualizeShapes.drawEllipse(ellipse, g2);
+						
+						//Indicate where this ellipse came from
+						//g2.setColor(Color.WHITE);
+						//g2.drawString(Integer.toString(fourthtubes.indexOf(a)), (int) b[0],(int) b[1]);
+					}	
+				}
+			}
+			
+			mask.ProcessFrame(newFrame);
+			gui.setBufferedImage(newFrame);
+			gui.repaint();
+
+			frameNum++;
+		}
+		mask.Close();
+		sequence.Close();
+		
+		//-------------------END OF GRAPHICS STUFF-------------------------------------------------
+		
+		return fourthtubes;
+		
+		
+	}
+	
+
+	
+	public void tubeWriter(ArrayList<ArrayList<double[]>> tubes, String textToGo) {
+		/* This function writes out tubes to a text file
+		 * Each inner ArrayList is separated by "Tube: XX"
+		 */
+
+		try {
+			PrintWriter writer = new PrintWriter(textToGo, "UTF-8");
 			for(ArrayList<double[]> tube: tubes){
 				for (double[] tubeslice: tube){
 					
@@ -1607,12 +2978,10 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 					for(int i=0;i<=newslice.length-1;i++){
 						newslice[i] = (double) Math.round(newslice[i] * 1000d) / 1000d ;
 					}
-				
 						
 					if (!((newslice[0] ==0) && (newslice[1]==0))){
 						writer.println(Array.toString(newslice));
 					}
-					
 				}
 			}
 			
@@ -1621,12 +2990,14 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		} catch (IOException e) {
 			//Blah
 		}
-		
 	}
 	
 	
+	
 	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
-	public String makeMagno(String stemLoc, String vidLoc) {
+	public String makeWholeMagno(String stemLoc, String vidLoc) {
+		
+		
 		//TIMER STUFF
 		long startTime;
 		long endTime;
@@ -1695,7 +3066,85 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 
 	}
 	
+	public ArrayList<BufferedImage> makeMagno(ArrayList<BufferedImage> vid) {
+		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
+		int width = vid.get(0).getWidth();
+		int height = vid.get(0).getHeight();
+		
+		VariableRetina retina = new VariableRetina(width, height, true); //create retina
+		
+		for(BufferedImage frame: vid){
+			retina.ProcessFrame(RGBModel.maxContrast(frame));
+			BufferedImage magFrame = retina.getMagno(); 
+			UI.PrintLn("Magno frame: " + frames.indexOf(magFrame));
+			frames.add(magFrame);
+		}
+		return frames;
+		
+	}
 	
+	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
+	public ArrayList<BufferedImage> makeMagno(String vidLoc) {
+		/* Given a video (vidLoc = filename), this function returns the 
+		 * magnocellular output as a list of images
+		 */
+		
+		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
+		sequence.OpenFile(); 
+		int height = sequence.getFrameHeight();
+		int width = sequence.getFrameWidth(); 
+		BufferedImage magFrame;
+
+		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
+		VariableRetina retina = new VariableRetina(width, height, true); //create retina
+		
+		BufferedImage inFrame = new BufferedImage(width,height,BufferedImage.TYPE_3BYTE_BGR); 
+		
+		int frameNum=2;
+		while((inFrame = sequence.NextFrame())!=null) { //Fill up 'frames' with magnos
+			retina.ProcessFrame(RGBModel.maxContrast(inFrame));
+			magFrame = retina.getMagno(); 
+			frames.add(magFrame);	
+		}
+		sequence.Close();
+		return frames;
+	}
+	
+	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
+	public ArrayList<BufferedImage> makeThreshMagno(String vidLoc) {
+		/* Given a video (vidLoc = filename), this function returns a  
+		 * thresholded version of the magnocellular output as a list of images
+		 */
+
+		ArrayList<BufferedImage> magnoStack = makeMagno(vidLoc);
+		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
+		byte[][] grayscale;
+		int[][] gray;
+		BufferedImage redoneFrame;
+
+		for(BufferedImage magFrame: magnoStack){
+			
+			grayscale = ImageUtils.BufferedImage2Grayscale(magFrame);
+			gray = Mat.Unsigned2Int(grayscale); //The frame is now an 2D int matrix
+		
+			//The following loop thresholds our 2D matrix of ints (<100 -> 0) (>100 -> 255) 
+			for(int i = 0; i < gray.length; i++) {
+				for(int j = 0; j < gray[i].length; j++) {
+					if(gray[i][j] < 100) gray[i][j] = 0;
+					else gray[i][j] = 255;
+				}
+			}
+			grayscale = Mat.Int2Unsigned(gray); //grayscale is the unsigned version of gray 
+			redoneFrame = ImageUtils.Grayscale2BufferedImage(grayscale, 255);
+			frames.add(redoneFrame);	
+			System.out.println("Thresholding: " + frames.indexOf(redoneFrame));
+		}
+		return frames;
+	}
+	
+	
+	
+	/*
 	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
 	public String makeFakeMagno(String stemLoc, String vidLoc) {
 		//TIMER STUFF
@@ -1711,7 +3160,6 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		int width = sequence.getFrameWidth(); 
 		
 	
-		
 		ArrayList<int[][]> grayFrames = new ArrayList<int[][]>();
 		ImageStack diffstack = new ImageStack(width,height);
 		ImageStack dilatedstack= new ImageStack(width,height);
@@ -1724,18 +3172,11 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		while((inFrame = sequence.NextFrame())!=null) { //Fill up 'frames' with grayscales
 		
 			
-			
-			
 			byte[][] gray = ImageUtils.BufferedImage2Grayscale(inFrame);
 			int[][] G= Mat.Unsigned2Int(gray);
 			grayFrames.add(G);
 			
 
-			
-			
-			
-		
-			
 			//SHOWS FRAME NUMBER
 			//g2.setColor(Color.white);
 			//g2.drawString(Integer.toString(frameNum), 20, 20);
@@ -1832,152 +3273,30 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 			frameNum++;
 		}
 		*/
-			
+			/*
 		mask.Close();
 		endTime = System.nanoTime();
 		totalMagnoTime += endTime - startTime;
 		System.out.println("Time in seconds: " +  Integer.toString((int) Math.round(totalMagnoTime/1e9)));
 		
 		return stemLoc;
-		
-
+	
 	}
+
 	
+	*/
 	
-	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
-	public String makeThreshMagno(String stemLoc, String vidLoc) {
-		//TIMER STUFF
-		long startTime;
-		long endTime;
+	public void addFrameNum(String outLoc, String inLoc){
+		/* Reads a vid in from inLoc, adds frame numbers, and 
+		 * rewrites it to outLoc
+		 */
 
-		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
-		sequence.OpenFile(); 
-		int height = sequence.getFrameHeight();
-		int width = sequence.getFrameWidth(); 
-
-		
-		
-		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
-		VariableRetina retina = new VariableRetina(width, height, true); //create retina
-		
-		/*
-		BufferedImage currFrame = retina.getMagno(); //currFrame = magno version
-		
-		byte grayscale[][] = ImageUtils.BufferedImage2Grayscale(currFrame);
-		int gray[][] = Mat.Unsigned2Int(grayscale); //The frame is now an 2D int matrix
-		
-		int unthresholded[][] = gray;
-		
-		
-		//The following loop thresholds our 2D matrix of ints (<100 -> 0) (>100 -> 255) 
-		for(int i = 0; i < gray.length; i++) {
-			for(int j = 0; j < gray[i].length; j++) {
-
-				if(gray[i][j] < 100) gray[i][j] = 0;
-				else gray[i][j] = 255;
-
-			}
-		}
-		
-		
-		grayscale = Mat.Int2Unsigned(gray); //grayscale is the unsigned version of gray 
-		
-		BufferedImage redoneFrame = ImageUtils.Grayscale2BufferedImage(grayscale, 255);
-		GrayF32 input = ConvertBufferedImage.convertFromSingle(redoneFrame, null, GrayF32.class); //More conversions
- 
-		GrayU8 binary = new GrayU8(input.width,input.height);
- 
-		// the mean pixel value is often a reasonable threshold when creating a binary image
-		double mean = ImageStatistics.mean(input);
- 
-		// create a binary image by thresholding (binary is the output)
-		// Values <= mean go to 0.  Values > mean go to 1.
-		ThresholdImageOps.threshold(input, binary, (float) mean, false);
- 
-		// reduce noise with some filtering (null = no output)
-		GrayU8 filtered = BinaryImageOps.erode8(binary, 1, null);
-		filtered = BinaryImageOps.dilate8(filtered, 1, null);
- 
-		GrayS32 blobs = new GrayS32(filtered.width, filtered.height);
-		GrayU8 blobs2 = new GrayU8(filtered.width, filtered.height);
-		BufferedImage blobs3 = new BufferedImage(filtered.width,filtered.height,newFrame.getType());
-		
-		*/
-		
-		BufferedImage inFrame = sequence.NextFrame();
-		int frameNum=2;
-		while((inFrame = sequence.NextFrame())!=null) { //Fill up 'frames' with magnos
-
-			retina.ProcessFrame(RGBModel.maxContrast(inFrame));
-			BufferedImage magFrame = retina.getMagno(); //currFrame = magno version
-			
-			byte grayscale[][] = ImageUtils.BufferedImage2Grayscale(magFrame);
-			int gray[][] = Mat.Unsigned2Int(grayscale); //The frame is now an 2D int matrix
-		
-			//The following loop thresholds our 2D matrix of ints (<100 -> 0) (>100 -> 255) 
-			for(int i = 0; i < gray.length; i++) {
-				for(int j = 0; j < gray[i].length; j++) {
-
-					if(gray[i][j] < 100) gray[i][j] = 0;
-					else gray[i][j] = 255;
-
-				}
-			}
-			grayscale = Mat.Int2Unsigned(gray); //grayscale is the unsigned version of gray 
-			BufferedImage redoneFrame = ImageUtils.Grayscale2BufferedImage(grayscale, 255);
-			
-			
-			
-			
-			frames.add(redoneFrame);
-			//
-			
-
-			
-		}
-		
-		sequence.Close();
-		
-		
-		VideoFrameWriter mask = new VideoFrameWriter(new File(stemLoc), width, height, 30); 
-		mask.OpenFile(); //open videowriter
-
-		for(BufferedImage currFrame: frames){
-			
-			
-			
-			mask.ProcessFrame(currFrame);
-			Graphics2D g2 = currFrame.createGraphics();
-			
-			//SHOWS FRAME NUMBER
-			g2.setColor(Color.white);
-			g2.drawString(Integer.toString(frameNum), 20, 20);
-			g2.setStroke(new BasicStroke(3));
-			frameNum++;
-		}
-			
-		mask.Close();
-		
-		
-		
-		return stemLoc;
-		
-
-	}
-	
-	
-	
-	public void addFrameNum(String stemLoc, String vidLoc){
-		
-
-		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
+		VideoFrameReader sequence = new VideoFrameReader(inLoc);
 		sequence.OpenFile();
 		
 		int height = sequence.getFrameHeight();
 		int width = sequence.getFrameWidth(); 
-
-		
-		VideoFrameWriter mask = new VideoFrameWriter(new File(stemLoc), width, height, 30); 
+		VideoFrameWriter mask = new VideoFrameWriter(new File(outLoc), width, height, 30); 
 		
 		mask.OpenFile(); //open videowriter
 		
@@ -2003,7 +3322,6 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		}
 		mask.Close();
 		sequence.Close();
-		
 	}
 	
 	@SuppressWarnings({ "unchecked", "unchecked" })
@@ -2412,6 +3730,118 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		
 		
 	}
+	
+	public static BufferedImage deepCopy(BufferedImage bi) {
+		//My name is KJ and I stole this chunk of code from StackOverflow.
+		if(bi != null){
+		 ColorModel cm = bi.getColorModel();
+		 boolean isAlphaPremultiplied = cm.isAlphaPremultiplied();
+		 WritableRaster raster = bi.copyData(null);
+		 return new BufferedImage(cm, raster, isAlphaPremultiplied, null);
+		}
+		else{return null;}
+	}
+	
+	
+	public ArrayList<BufferedImage> readVid(String vidLoc) {
+		/* This function reads in a video stored (as an mp4) at vidLoc.
+		 * The vid is converted to a list of images and returned
+		 */
+
+		ArrayList<BufferedImage> frames = new ArrayList<BufferedImage>();
+		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
+		sequence.OpenFile(); 
+		BufferedImage temp;
+
+		BufferedImage inFrame = null;
+		while((inFrame = sequence.NextFrame()) !=null) { //For each frame 
+
+			temp = deepCopy(inFrame);
+			frames.add(temp);
+		
+			/*
+			if(sequence.getFrameNum()%100 == 0){
+				//Show me what you got every 100 frames
+				JFrame frame = new JFrame();
+				frame.getContentPane().setLayout(new FlowLayout());
+				frame.getContentPane().add(new JLabel(new ImageIcon(temp)));
+				frame.pack();
+				frame.setVisible(true);
+			}*/
+
+		}
+		sequence.Close();
+		return frames;
+	}
+	
+	public void writeVid(List<BufferedImage> vidStack, String vidLoc){
+		/* This function takes a list of images (vidStack) and writes it as a MP4 video
+		 * at vidLoc
+		 */
+		int height = vidStack.get(0).getHeight();
+		int width = vidStack.get(0).getWidth();
+		Graphics2D g2;
+		
+		VideoFrameWriter mask = new VideoFrameWriter(new File(vidLoc), width, height, 30); 
+		mask.OpenFile(); //open videowriter
+		
+		for (BufferedImage vidFrame: vidStack){//for each frame
+			if(vidFrame!=null){
+				g2 = vidFrame.createGraphics(); 
+				g2.setColor(Color.white); //Write the frame number on it 
+				g2.drawString(Integer.toString(vidStack.indexOf(vidFrame)), 20, 20);
+				g2.setStroke(new BasicStroke(3));
+				mask.ProcessFrame(vidFrame);	
+			}
+		}
+		mask.Close();	
+	}
+	
+	/*
+	public void writeVid(List<BufferedImage> vidStack, String vidLoc, ArrayList<ArrayList<double[]>> tubes){
+		//NOT SURE IF THIS WORKS YET
+		
+		int height = vidStack.get(0).getHeight();
+		int width = vidStack.get(0).getWidth();
+		
+		VideoFrameWriter mask = new VideoFrameWriter(new File(vidLoc), width, height, 30); 
+		mask.OpenFile(); //open videowriter
+		EllipseRotated_F64 ellipse;
+		int frameNum = 1;
+		
+		for (BufferedImage vidFrame: vidStack){
+			
+			Graphics2D g2 = vidFrame.createGraphics();
+			g2.setColor(Color.white);
+			g2.drawString(Integer.toString(vidStack.indexOf(vidFrame)), 20, 20);
+			g2.setStroke(new BasicStroke(3));
+			
+			//PUT OBJECT OF INTEREST BELOW
+			for(ArrayList<double[]> a : tubes){ 
+				for(double[] b : a){
+					if (b[5] ==frameNum){ //if this is your frame
+						//Make new ellipse with (x0, y0, a, b, rotation)
+						ellipse = new EllipseRotated_F64(b[0], b[1], b[2], b[3], b[4]);
+						g2.setColor(new Color((float) b[8],(float) b[9], (float) b[10]));
+						g2.setStroke(new BasicStroke(3));  //thick tubes
+						VisualizeShapes.drawEllipse(ellipse, g2);
+						
+						//Indicate where this ellipse came from
+						//g2.setColor(Color.WHITE);
+						//g2.drawString(Integer.toString(tubes.indexOf(a)), (int) b[0],(int) b[1]);
+					}
+				}
+			}
+			frameNum++;
+
+		}
+
+		mask.Close();
+
+		
+		//-------------------END OF GRAPHICS STUFF-------------------------------------------------
+	}
+	*/
 	
 	public void magnoTest(String stemLoc, String vidLoc){
 		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
@@ -3333,42 +4763,48 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		
 	}
 	
+	
+	
 	@SuppressWarnings("unchecked")
 	public static void main(String[] args) {
 	
-//		DOOGDriver2.doogfilter("/home/grangerlab/workspace/chris/output138628_BIGGER.mp4", "output138638_doog.mp4");
-		
-		RetinaFeatureTracker p = new RetinaFeatureTracker(new BoxKLTDetector(GrayF32.class), GrayF32.class, "nameoffile.mp4", 25); //you can leave these parameters filled in like this; they aren't used for what follows
-		//String filePathOfVideo = "C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/GTA5_2.1.17.mp4"; //replace as desired
-		//p.boundprocess(filePathOfVideo);  //Giving me a CRAZY fatal error
-		//p.boxvideos3(filePathOfVideo, "C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/gtasplit/gta ", 10); //split up videos are saved in folder "pacmansplit" with prefix "pac"
-		//String magnoStemLoc = "C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/Magnos/int9";
-		
-		String inputLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/gta5.mp4";						//what vid to handle? (vidLoc)
-		String magnoLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/gta5_threshmagno.mp4";			//where to put result? (stemLoc)
-		String outvidLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/gta5_out.mp4";			//where to put result? (stemLoc)
-		String magnoLoc2= "C:/Users/f002tj9/Documents/Research/kj/Output/gta5_TDout.mp4";			//where to put result?
-		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/Text/virat6_tubelist.txt";
-		
 
 		
-		//p.magnoFilter(outvidLoc, inputLoc);
-		//File tubefile = new File("C:/Users/f002tj9/Documents/Research/kj/TubeLists/" + CatGetter.stemOnly(inputLoc) + ".zip" );
+		RetinaFeatureTracker p = new RetinaFeatureTracker(new BoxKLTDetector(GrayF32.class), GrayF32.class, "nameoffile.mp4", 25); //you can leave these parameters filled in like this; they aren't used for what follows
+
+		String inLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/gta5.mp4";						//what vid to handle? (vidLoc)
+		String magnoLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/gta5_threshmagno.mp4";			//where to put result? (stemLoc)
+		String outLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/gta5_outA.mp4";			//where to put result? (stemLoc)
+		//String magnoLoc2= "C:/Users/f002tj9/Documents/Research/kj/Output/gta4_TDout.mp4";			//where to put result?
+		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/Text/gta5_tubelist.txt";
+		
+		
+		
+		ArrayList<BufferedImage> magno = p.makeThreshMagno(inLoc);
+		p.writeVid(magno, magnoLoc);
+		ArrayList<ArrayList<double[]>> tubes = p.makeTubesFromMagno(magno, inLoc, outLoc);
+		p.tubeWriter(tubes, txtLoc);
+		
+		
+		
+		
+		//p.magnoFilter(stemLoc, vidLoc);
+		//File tubefile = new File("C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/TubeLists/" + CatGetter.stemOnly(vidLoc) + ".zip" );
 		//ArrayList<ArrayList<double[]>> tubes = (ArrayList<ArrayList<double[]>>) FileIO.LoadObject(tubefile);
 		
-		
-		p.makeThreshMagno(magnoLoc, inputLoc);
-		//p.topDownMagno(tubes, magnoLoc2,magnoLoc, inputLoc);
 		//p.tubeWriter(tubes, txtLoc);
+		//p.makeThreshMagno(magnoLoc, vidLoc);
+		//p.topDownMagno(tubes, stemLoc2,stemLoc);
 		
 		
-		 //p.addFrameNum(outvidLoc, inputLoc);
+		//p.addFrameNum(stemLoc, vidLoc);
 		
 		//p.magnoTest(stemLoc, vidLoc);
 		
 		
-		
+		System.out.println("Iight, I'm done.");
 
 	}
+
 	
 }
