@@ -2934,8 +2934,9 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 						VisualizeShapes.drawEllipse(ellipse, g2);
 						
 						//Indicate where this ellipse came from
-						//g2.setColor(Color.WHITE);
-						//g2.drawString(Integer.toString(fourthtubes.indexOf(a)), (int) b[0],(int) b[1]);
+						g2.setColor(Color.RED);
+						g2.setStroke(new BasicStroke(5));
+						g2.drawString(Integer.toString(fourthtubes.indexOf(a)), (int) b[0],(int) b[1]);
 					}	
 				}
 			}
@@ -3797,8 +3798,8 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		mask.Close();	
 	}
 	
-	/*
-	public void writeVid(List<BufferedImage> vidStack, String vidLoc, ArrayList<ArrayList<double[]>> tubes){
+	
+	public void addTubesToVid(List<BufferedImage> vidStack, String vidLoc, ArrayList<ArrayList<double[]>> tubes){
 		//NOT SURE IF THIS WORKS YET
 		
 		int height = vidStack.get(0).getHeight();
@@ -3832,6 +3833,8 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 					}
 				}
 			}
+
+			mask.ProcessFrame(vidFrame);
 			frameNum++;
 
 		}
@@ -3841,7 +3844,7 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		
 		//-------------------END OF GRAPHICS STUFF-------------------------------------------------
 	}
-	*/
+	
 	
 	public void magnoTest(String stemLoc, String vidLoc){
 		VideoFrameReader sequence = new VideoFrameReader(vidLoc);
@@ -4772,25 +4775,35 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		
 		RetinaFeatureTracker p = new RetinaFeatureTracker(new BoxKLTDetector(GrayF32.class), GrayF32.class, "nameoffile.mp4", 25); //you can leave these parameters filled in like this; they aren't used for what follows
 
-		String inLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/gta5.mp4";						//what vid to handle? (vidLoc)
-		String magnoLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/gta5_threshmagno.mp4";			//where to put result? (stemLoc)
-		String outLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/gta5_outA.mp4";			//where to put result? (stemLoc)
-		//String magnoLoc2= "C:/Users/f002tj9/Documents/Research/kj/Output/gta4_TDout.mp4";			//where to put result?
-		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/Text/gta5_tubelist.txt";
+		String inLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/ski1.mp4";						//what vid to handle? (vidLoc)
+		String magnoinLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/ski1_JLJmagno.mp4";			//where to put result? (stemLoc)
+		//String magnooutLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/ski1_magno.mp4";			//where to put result? (stemLoc)
+		String outLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/ski1_outA.mp4";			//where to put result? (stemLoc)
+		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/TDMatlab/ski1_tubelistA.txt";
 		
 		
 		
-		ArrayList<BufferedImage> magno = p.makeThreshMagno(inLoc);
-		p.writeVid(magno, magnoLoc);
+		
+		//ArrayList<BufferedImage> magno = p.makeThreshMagno(inLoc);
+		//p.writeVid(magno, magnoLoc);
+		
+		ArrayList<BufferedImage> magno = p.readVid(magnoinLoc);
+		
 		ArrayList<ArrayList<double[]>> tubes = p.makeTubesFromMagno(magno, inLoc, outLoc);
 		p.tubeWriter(tubes, txtLoc);
+		 
+		
+		//File tubefile = new File("C:/Users/f002tj9/Documents/Research/kj/TubeLists/" + CatGetter.stemOnly(inLoc) + ".zip" );
+		//ArrayList<ArrayList<double[]>> tubes = p.makeTubesFromMagno(magno, inLoc, outLoc);
+		
+		//p.writeVid(magno, magnoLoc);
+		
 		
 		
 		
 		
 		//p.magnoFilter(stemLoc, vidLoc);
-		//File tubefile = new File("C:/Users/Khari Jarrett/Documents/VideoProcessing-master/chris/TubeLists/" + CatGetter.stemOnly(vidLoc) + ".zip" );
-		//ArrayList<ArrayList<double[]>> tubes = (ArrayList<ArrayList<double[]>>) FileIO.LoadObject(tubefile);
+
 		
 		//p.tubeWriter(tubes, txtLoc);
 		//p.makeThreshMagno(magnoLoc, vidLoc);
