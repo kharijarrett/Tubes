@@ -12,8 +12,11 @@ import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.WritableRaster;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.UnsupportedEncodingException;
@@ -2993,6 +2996,110 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 		}
 	}
 	
+	public void tubeWriterCSV(ArrayList<ArrayList<double[]>> tubes, String textToGo) {
+		/* This function writes out tubes to a text file
+		 * Each inner ArrayList is separated by "Tube: XX"
+		 */
+
+		try {
+			
+			FileWriter csvWriter = new FileWriter(textToGo);
+
+			csvWriter.append("x");
+			csvWriter.append(",");
+			csvWriter.append("y");
+			csvWriter.append(",");
+			csvWriter.append("a");
+			csvWriter.append(",");
+			csvWriter.append("b");
+			csvWriter.append(",");
+			csvWriter.append("rot");
+			csvWriter.append(",");
+			csvWriter.append("f");
+			csvWriter.append(",");
+			csvWriter.append("Vx");
+			csvWriter.append(",");
+			csvWriter.append("Vy");
+			csvWriter.append(",");
+			csvWriter.append("R");
+			csvWriter.append(",");
+			csvWriter.append("G");
+			csvWriter.append(",");
+			csvWriter.append("B");
+			csvWriter.append(",");
+			csvWriter.append("tubenum");
+			csvWriter.append(",");
+			csvWriter.append("\n");
+
+
+			for(ArrayList<double[]> tube: tubes){
+				for (double[] tubeslice: tube){
+					
+					String[] textslice = new String[12];
+					for(int i=0; i<11; i++){ //Copy over tubeslice[0:8]
+						textslice[i] = ((Double) tubeslice[i]).toString();
+					}
+					textslice[11] = ((Integer) tubes.indexOf(tube)).toString();
+					csvWriter.append(String.join(",", textslice));
+					csvWriter.append("\n");
+				}
+			}
+			
+			csvWriter.flush();
+			csvWriter.close();
+
+		} catch (IOException e) {
+			//Blah
+		}
+	}
+	
+	
+	public ArrayList<ArrayList<double[]>> readTubeCSV(String CSVinfile) {
+		/* This function writes out tubes to a text file
+		 * Each inner ArrayList is separated by "Tube: XX"
+		 */
+		ArrayList<ArrayList<double[]>> tubes = new ArrayList<ArrayList<double[]>>();
+		try {
+		
+			
+			String row;
+			
+			BufferedReader csvReader = new BufferedReader(new FileReader(CSVinfile));
+			int thistubenum = 0;
+			ArrayList<double[]> tube = new ArrayList<double[]>();
+			csvReader.readLine();
+			while ((row = csvReader.readLine())!= null) {
+
+				
+				//Read in the new line
+				String[] sdata = row.split(",");
+				double[] data = new double[sdata.length];
+				for(int i=0; i<sdata.length; i++){
+					data[i] = Double.valueOf(sdata[i]);
+				} //Makes a double[] copy of the line
+				
+				int tubenum = (int) Math.round(data[data.length-1]);
+				
+				if(thistubenum == tubenum){
+					tube.add(Arrays.copyOfRange(data,1,data.length-1));
+				}
+				else{
+					tubes.add(tube); //Lock in the old tube
+					tube = new ArrayList<double[]>();
+					thistubenum = tubenum;
+				}
+				
+				
+			}
+			tubes.add(tube);
+			
+			csvReader.close();
+			
+		} catch (IOException e) {
+			//Blah
+		}
+		return tubes;
+	}
 	
 	
 	@SuppressWarnings({ "unchecked", "unused", "deprecation" })
@@ -3799,22 +3906,27 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 	}
 	
 	
-	public void addTubesToVid(List<BufferedImage> vidStack, String vidLoc, ArrayList<ArrayList<double[]>> tubes){
+	public void putTubesOnVid(ArrayList<ArrayList<double[]>> tubes, String vidLocin, String vidLocout){
 		//NOT SURE IF THIS WORKS YET
 		
-		int height = vidStack.get(0).getHeight();
-		int width = vidStack.get(0).getWidth();
+		VideoFrameReader sequence = new VideoFrameReader(vidLocin);
+		sequence.OpenFile();
 		
-		VideoFrameWriter mask = new VideoFrameWriter(new File(vidLoc), width, height, 30); 
+		int height = sequence.getFrameHeight();
+		int width = sequence.getFrameWidth(); 
+
+		VideoFrameWriter mask = new VideoFrameWriter(new File(vidLocout), width, height, 30); 
 		mask.OpenFile(); //open videowriter
+		
 		EllipseRotated_F64 ellipse;
 		int frameNum = 1;
 		
-		for (BufferedImage vidFrame: vidStack){
+		BufferedImage newFrame = null;
+		while ((newFrame = sequence.NextFrame()) != null) {
 			
-			Graphics2D g2 = vidFrame.createGraphics();
+			Graphics2D g2 = newFrame.createGraphics();
 			g2.setColor(Color.white);
-			g2.drawString(Integer.toString(vidStack.indexOf(vidFrame)), 20, 20);
+			g2.drawString(Integer.toString(frameNum), 20, 20);
 			g2.setStroke(new BasicStroke(3));
 			
 			//PUT OBJECT OF INTEREST BELOW
@@ -3828,21 +3940,20 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 						VisualizeShapes.drawEllipse(ellipse, g2);
 						
 						//Indicate where this ellipse came from
-						//g2.setColor(Color.WHITE);
-						//g2.drawString(Integer.toString(tubes.indexOf(a)), (int) b[0],(int) b[1]);
+						g2.setColor(Color.WHITE);
+						g2.drawString(Integer.toString(tubes.indexOf(a)), (int) b[0],(int) b[1]);
 					}
 				}
 			}
 
-			mask.ProcessFrame(vidFrame);
+			mask.ProcessFrame(newFrame);
 			frameNum++;
 
 		}
 
 		mask.Close();
 
-		
-		//-------------------END OF GRAPHICS STUFF-------------------------------------------------
+
 	}
 	
 	
@@ -4771,50 +4882,30 @@ public class RetinaFeatureTracker< T extends ImageGray, D extends ImageGray> ext
 	@SuppressWarnings("unchecked")
 	public static void main(String[] args) {
 	
-
-		
 		RetinaFeatureTracker p = new RetinaFeatureTracker(new BoxKLTDetector(GrayF32.class), GrayF32.class, "nameoffile.mp4", 25); //you can leave these parameters filled in like this; they aren't used for what follows
 
-		String inLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/ski1.mp4";						//what vid to handle? (vidLoc)
-		String magnoinLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/ski1_JLJmagno.mp4";			//where to put result? (stemLoc)
+		String inLoc = "C:/Users/f002tj9/Documents/Research/kj/Data/virat4.mp4";						//what vid to handle? (vidLoc)
+		String magnoinLoc= "C:/Users/f002tj9/Documents/Research/kj/Magno2020/gta4_JLJmagno.mp4";			//where to put result? (stemLoc)
 		//String magnooutLoc= "C:/Users/f002tj9/Documents/Research/kj/Magnos/ski1_magno.mp4";			//where to put result? (stemLoc)
-		String outLoc= "C:/Users/f002tj9/Documents/Research/kj/Output/ski1_outA.mp4";			//where to put result? (stemLoc)
-		String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/TDMatlab/ski1_tubelistA.txt";
-		
-		
+		String outLoc= "C:/Users/f002tj9/Documents/Research/kj/TubeVid2020/virat4_outv3.mp4";			//where to put result? (stemLoc)
+		//String txtLoc = "C:/Users/f002tj9/Documents/Research/kj/TubeFile2020/ski2_tubelist.txt";
+		String csvLoc = "C:/Users/f002tj9/Documents/Research/kj/TubeFile2020/virat4_tubelistv3.csv";
+		String csvLoc2 = "C:/Users/f002tj9/Documents/Research/kj/TubeFile2020/ski1_tubelistSKIM2.csv";
 		
 		
 		//ArrayList<BufferedImage> magno = p.makeThreshMagno(inLoc);
 		//p.writeVid(magno, magnoLoc);
 		
-		ArrayList<BufferedImage> magno = p.readVid(magnoinLoc);
-		
-		ArrayList<ArrayList<double[]>> tubes = p.makeTubesFromMagno(magno, inLoc, outLoc);
-		p.tubeWriter(tubes, txtLoc);
-		 
-		
-		//File tubefile = new File("C:/Users/f002tj9/Documents/Research/kj/TubeLists/" + CatGetter.stemOnly(inLoc) + ".zip" );
+		//ArrayList<BufferedImage> magno = p.readVid(magnoinLoc);
 		//ArrayList<ArrayList<double[]>> tubes = p.makeTubesFromMagno(magno, inLoc, outLoc);
+		//p.tubeWriterCSV(tubes, csvLoc);
 		
-		//p.writeVid(magno, magnoLoc);
+		ArrayList<ArrayList<double[]>> tubes = p.readTubeCSV(csvLoc);
+		p.putTubesOnVid(tubes, inLoc, outLoc);
 		
+		//p.tubeWriterCSV(tubes, csvLoc2);
 		
-		
-		
-		
-		//p.magnoFilter(stemLoc, vidLoc);
 
-		
-		//p.tubeWriter(tubes, txtLoc);
-		//p.makeThreshMagno(magnoLoc, vidLoc);
-		//p.topDownMagno(tubes, stemLoc2,stemLoc);
-		
-		
-		//p.addFrameNum(stemLoc, vidLoc);
-		
-		//p.magnoTest(stemLoc, vidLoc);
-		
-		
 		System.out.println("Iight, I'm done.");
 
 	}
